@@ -21,3 +21,11 @@ Full validation:
 ```bash
 make check
 ```
+
+Hardware-facing Modbus smoke checks live outside the host unit test suite:
+
+```bash
+make smoke PORT=/dev/ttyUSB0
+```
+
+Those checks require a flashed board and a USB-RS485 adapter, so they are not part of `make check`.

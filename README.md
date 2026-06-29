@@ -50,6 +50,8 @@ Manual setup outside the container:
 python -m pip install -r requirements.txt
 ```
 
+For USB-RS485 smoke testing from inside the devcontainer, pass the adapter through to the container. On Linux this is commonly `/dev/ttyUSB0`; on macOS Docker Desktop usually exposes USB serial devices differently, so running the smoke test on the host can be simpler.
+
 ## Build And Validate
 
 ```bash
@@ -69,6 +71,24 @@ Full validation:
 
 ```bash
 make check
+```
+
+Hardware smoke test with a USB-RS485 adapter:
+
+```bash
+make smoke PORT=/dev/ttyUSB0
+```
+
+On macOS the port often looks like `/dev/cu.usbserial-0001`:
+
+```bash
+make smoke PORT=/dev/cu.usbserial-0001
+```
+
+Override serial settings when your YAML is not at the defaults:
+
+```bash
+make smoke PORT=/dev/ttyUSB0 SLAVE=1 BAUD=9600 PARITY=N
 ```
 
 ## Flashing
@@ -211,6 +231,14 @@ Example checks:
 - Read start `0x0004`, length `2` for signed active power.
 - Read start `0x000B`, length `1` for product ID `104`.
 - Confirm `/debug` shows the requests.
+
+The repository includes a small smoke-test client:
+
+```bash
+python tools/modbus_smoke_test.py --port /dev/ttyUSB0 --slave 1
+```
+
+It checks FC03/FC04 reads for the implemented EM112 PF.B registers and FC08 Return Query Data. It is intentionally separate from `make check` because it requires a flashed board and a physical USB-RS485 adapter.
 
 If the Wallbox polls unknown registers, enable debug logging and inspect `/debug`. Unknown registers return `0` unless strict mode is enabled.
 

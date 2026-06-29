@@ -1,10 +1,17 @@
-.PHONY: setup config compile test check clean
+.PHONY: setup config compile test smoke check clean
 
 PYTHON ?= python
 ESPHOME ?= esphome
 CXX ?= c++
 CONFIG := wallbox-powerboost-emulator.yaml
 TEST_BIN := /tmp/wallbox-powerboost-emulator-tests
+PLATFORMIO_CORE_DIR ?= $(CURDIR)/.platformio
+PORT ?= /dev/ttyUSB0
+SLAVE ?= 1
+BAUD ?= 9600
+PARITY ?= N
+
+export PLATFORMIO_CORE_DIR
 
 setup:
 	$(PYTHON) -m pip install -r requirements.txt
@@ -24,6 +31,9 @@ test:
 		tests/test_register_packing.cpp \
 		-o $(TEST_BIN)
 	$(TEST_BIN)
+
+smoke:
+	$(PYTHON) tools/modbus_smoke_test.py --port $(PORT) --slave $(SLAVE) --baud $(BAUD) --parity $(PARITY)
 
 check: test config compile
 
