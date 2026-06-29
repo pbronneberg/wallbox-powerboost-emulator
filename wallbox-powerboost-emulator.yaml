@@ -1,0 +1,260 @@
+substitutions:
+  project_name: wallbox-powerboost-emulator
+  friendly_name: Wallbox PowerBoost Emulator
+  rs485_tx_pin: GPIO17
+  rs485_rx_pin: GPIO18
+  modbus_baud: "9600"
+  modbus_parity: NONE
+  modbus_stop_bits: "1"
+  modbus_slave_id: "1"
+  dsmr_default_url: http://dsmr-api.local/api/v1/sm/actual
+  fallback_ap_password: change-me-please
+
+esphome:
+  name: ${project_name}
+  friendly_name: ${friendly_name}
+  comment: Unofficial experimental Carlo Gavazzi EM112 PF.B emulator for Wallbox Power Boost
+  project:
+    name: nly96192.wallbox-powerboost-emulator
+    version: "0.1.0"
+
+esp32:
+  board: esp32-s3-devkitc-1
+  framework:
+    type: arduino
+
+logger:
+  baud_rate: 0
+  level: INFO
+
+api:
+
+ota:
+  - platform: esphome
+
+safe_mode:
+
+wifi:
+  ap:
+    ssid: EM112-Bridge-Fallback
+    password: ${fallback_ap_password}
+
+captive_portal:
+
+web_server:
+  port: 80
+
+external_components:
+  - source:
+      type: local
+      path: components
+
+uart:
+  id: rs485_uart
+  tx_pin: ${rs485_tx_pin}
+  rx_pin: ${rs485_rx_pin}
+  baud_rate: ${modbus_baud}
+  parity: ${modbus_parity}
+  stop_bits: ${modbus_stop_bits}
+
+em112_bridge:
+  id: wallbox_powerboost_emulator_component
+  uart_id: rs485_uart
+  dsmr_url: ${dsmr_default_url}
+  poll_interval: 10s
+  stale_timeout: 30s
+  fail_safe_import_power: 7000
+  source_phase: l1
+  modbus_slave_id: ${modbus_slave_id}
+  strict_exceptions: false
+  debug_logging: false
+
+  grid_net_power:
+    name: Grid Net Power
+  grid_import_power:
+    name: Grid Import Power
+  grid_export_power:
+    name: Grid Export Power
+  selected_voltage:
+    name: Selected Voltage
+  selected_current:
+    name: Selected Current
+  import_energy:
+    name: Import Energy
+  export_energy:
+    name: Export Energy
+  apparent_power:
+    name: Apparent Power
+  reactive_power:
+    name: Reactive Power
+  power_factor:
+    name: Power Factor
+  frequency:
+    name: Frequency
+  dsmr_last_poll_age:
+    name: DSMR Last Poll Age
+  dsmr_response_time:
+    name: DSMR API Response Time
+  dsmr_successful_polls:
+    name: DSMR Successful Poll Counter
+  dsmr_failed_polls:
+    name: DSMR Failed Poll Counter
+  modbus_total_requests:
+    name: Modbus Total Requests
+  modbus_requests_per_minute:
+    name: Modbus Requests Per Minute
+  modbus_crc_errors:
+    name: Modbus CRC Error Count
+  modbus_unsupported_functions:
+    name: Modbus Unsupported Function Count
+  modbus_illegal_addresses:
+    name: Modbus Illegal Address Count
+  modbus_exceptions:
+    name: Modbus Exception Count
+  modbus_wrong_slave_ids:
+    name: Modbus Wrong Slave ID Count
+  last_modbus_function:
+    name: Last Modbus Function Code
+  last_modbus_start_address:
+    name: Last Modbus Start Address
+  last_modbus_quantity:
+    name: Last Modbus Quantity
+  last_modbus_exception:
+    name: Last Modbus Exception Code
+  seconds_since_last_wallbox_poll:
+    name: Seconds Since Last Wallbox Poll
+
+  dsmr_api_connected:
+    name: DSMR API Connected
+  dsmr_data_stale:
+    name: DSMR Data Stale
+  wallbox_polling_active:
+    name: Wallbox Polling Active
+  fail_safe_active:
+    name: Fail-safe Active
+  last_modbus_crc_ok:
+    name: Last Modbus CRC OK
+
+  dsmr_last_timestamp:
+    name: DSMR Last Timestamp
+  dsmr_last_error:
+    name: DSMR Last Error
+  selected_source_phase:
+    name: Selected Source Phase
+  last_modbus_request_summary:
+    name: Last Modbus Request Summary
+  last_modbus_frame_hex:
+    name: Last Modbus Frame Hex
+  last_requested_register_range:
+    name: Last Requested Register Range
+
+button:
+  - platform: restart
+    name: Restart
+  - platform: safe_mode
+    name: Restart In Safe Mode
+  - platform: factory_reset
+    name: Factory Reset Disabled - Do Not Use
+    disabled_by_default: true
+
+sensor:
+  - platform: uptime
+    name: Uptime
+    entity_category: diagnostic
+  - platform: wifi_signal
+    name: Wi-Fi RSSI
+    update_interval: 60s
+    entity_category: diagnostic
+  - platform: template
+    name: Free Heap
+    id: free_heap_sensor
+    unit_of_measurement: B
+    entity_category: diagnostic
+    update_interval: 30s
+    lambda: |-
+      return ESP.getFreeHeap();
+
+binary_sensor:
+  - platform: status
+    name: Status
+
+number:
+  - platform: template
+    name: Fail-safe Import Power
+    entity_category: config
+    min_value: 1000
+    max_value: 22000
+    step: 100
+    initial_value: 7000
+    restore_value: true
+    optimistic: true
+    set_action:
+      - lambda: id(wallbox_powerboost_emulator_component).set_fail_safe_import_power(x);
+  - platform: template
+    name: Stale Timeout
+    entity_category: config
+    min_value: 5
+    max_value: 300
+    step: 1
+    initial_value: 30
+    restore_value: true
+    optimistic: true
+    set_action:
+      - lambda: id(wallbox_powerboost_emulator_component).set_stale_timeout_seconds((uint32_t) x);
+  - platform: template
+    name: DSMR Poll Interval
+    entity_category: config
+    min_value: 2
+    max_value: 120
+    step: 1
+    initial_value: 10
+    restore_value: true
+    optimistic: true
+    set_action:
+      - lambda: id(wallbox_powerboost_emulator_component).set_poll_interval_seconds((uint32_t) x);
+
+select:
+  - platform: template
+    name: Source Phase Mode
+    entity_category: config
+    options:
+      - total
+      - l1
+      - l2
+      - l3
+    initial_option: l1
+    optimistic: true
+    restore_value: true
+    set_action:
+      - lambda: id(wallbox_powerboost_emulator_component).set_source_phase_string(x.c_str());
+
+switch:
+  - platform: template
+    name: Debug Logging
+    entity_category: config
+    restore_mode: RESTORE_DEFAULT_OFF
+    optimistic: true
+    turn_on_action:
+      - lambda: id(wallbox_powerboost_emulator_component).set_debug_logging(true);
+    turn_off_action:
+      - lambda: id(wallbox_powerboost_emulator_component).set_debug_logging(false);
+  - platform: template
+    name: Strict Modbus Exceptions
+    entity_category: config
+    restore_mode: RESTORE_DEFAULT_OFF
+    optimistic: true
+    turn_on_action:
+      - lambda: id(wallbox_powerboost_emulator_component).set_strict_exceptions(true);
+    turn_off_action:
+      - lambda: id(wallbox_powerboost_emulator_component).set_strict_exceptions(false);
+
+text:
+  - platform: template
+    name: DSMRlogger URL
+    entity_category: config
+    mode: text
+    optimistic: true
+    restore_value: true
+    initial_value: ${dsmr_default_url}
+    set_action:
+      - lambda: id(wallbox_powerboost_emulator_component).set_dsmr_url(x.c_str());
