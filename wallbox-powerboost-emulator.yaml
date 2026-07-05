@@ -3,6 +3,7 @@ substitutions:
   friendly_name: Wallbox PowerBoost Emulator
   rs485_tx_pin: GPIO17
   rs485_rx_pin: GPIO18
+  rs485_txd1en_pin: GPIO21
   modbus_baud: "9600"
   modbus_parity: NONE
   modbus_stop_bits: "1"
@@ -53,6 +54,7 @@ uart:
   id: rs485_uart
   tx_pin: ${rs485_tx_pin}
   rx_pin: ${rs485_rx_pin}
+  flow_control_pin: ${rs485_txd1en_pin}
   baud_rate: ${modbus_baud}
   parity: ${modbus_parity}
   stop_bits: ${modbus_stop_bits}
