@@ -94,6 +94,7 @@ class Em112Bridge : public Component, public uart::UARTDevice {
 #ifdef USE_WEBSERVER
   friend class Em112DebugJsonHandler;
   friend class Em112DebugHandler;
+  bool web_handlers_registered_{false};
 #endif
   static void dsmr_task_trampoline(void *arg);
   void dsmr_task();

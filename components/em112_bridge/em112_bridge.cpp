@@ -190,6 +190,11 @@ void Em112Bridge::setup() {
 }
 
 void Em112Bridge::loop() {
+#ifdef USE_WEBSERVER
+  if (!this->web_handlers_registered_)
+    this->register_web_handlers_();
+#endif
+
   this->service_uart_();
 
   const uint32_t now = now_ms();
@@ -407,7 +412,8 @@ class Em112DebugJsonHandler : public AsyncWebHandler {
   explicit Em112DebugJsonHandler(Em112Bridge *parent) : parent_(parent) {}
   bool canHandle(AsyncWebServerRequest *request) const override {
     char url[AsyncWebServerRequest::URL_BUF_SIZE]{};
-    return request->method() == HTTP_GET && std::string(request->url_to(url)) == "/debug.json";
+    const auto request_url = request->url_to(url);
+    return request->method() == HTTP_GET && (request_url == "/debug.json" || request_url == "/debug.json/");
   }
   void handleRequest(AsyncWebServerRequest *request) override { this->parent_->handle_debug_json_request_(request); }
 
@@ -420,7 +426,8 @@ class Em112DebugHandler : public AsyncWebHandler {
   explicit Em112DebugHandler(Em112Bridge *parent) : parent_(parent) {}
   bool canHandle(AsyncWebServerRequest *request) const override {
     char url[AsyncWebServerRequest::URL_BUF_SIZE]{};
-    return request->method() == HTTP_GET && std::string(request->url_to(url)) == "/debug";
+    const auto request_url = request->url_to(url);
+    return request->method() == HTTP_GET && (request_url == "/debug" || request_url == "/debug/");
   }
   void handleRequest(AsyncWebServerRequest *request) override { this->parent_->handle_debug_request_(request); }
 
@@ -431,141 +438,208 @@ class Em112DebugHandler : public AsyncWebHandler {
 
 void Em112Bridge::register_web_handlers_() {
 #ifdef USE_WEBSERVER
+  if (this->web_handlers_registered_)
+    return;
   if (web_server_base::global_web_server_base == nullptr ||
       web_server_base::global_web_server_base->get_server() == nullptr)
     return;
 
   web_server_base::global_web_server_base->add_handler(new Em112DebugJsonHandler(this));
   web_server_base::global_web_server_base->add_handler(new Em112DebugHandler(this));
+  this->web_handlers_registered_ = true;
 #endif
 }
 
 #ifdef USE_WEBSERVER
+namespace {
+
+void write_json_escaped(AsyncResponseStream *out, const char *text) {
+  if (out == nullptr || text == nullptr)
+    return;
+  for (const char *p = text; *p != '\0'; p++) {
+    switch (*p) {
+      case '\\':
+        out->print("\\\\");
+        break;
+      case '"':
+        out->print("\\\"");
+        break;
+      case '\n':
+        out->print("\\n");
+        break;
+      case '\r':
+        out->print("\\r");
+        break;
+      case '\t':
+        out->print("\\t");
+        break;
+      default:
+        out->write(static_cast<uint8_t>(*p));
+        break;
+    }
+  }
+}
+
+void write_html_escaped(AsyncResponseStream *out, const char *text) {
+  if (out == nullptr || text == nullptr)
+    return;
+  for (const char *p = text; *p != '\0'; p++) {
+    switch (*p) {
+      case '&':
+        out->print("&amp;");
+        break;
+      case '<':
+        out->print("&lt;");
+        break;
+      case '>':
+        out->print("&gt;");
+        break;
+      case '"':
+        out->print("&quot;");
+        break;
+      case '\'':
+        out->print("&#39;");
+        break;
+      default:
+        out->write(static_cast<uint8_t>(*p));
+        break;
+    }
+  }
+}
+
+}  // namespace
+
 void Em112Bridge::handle_debug_json_request_(AsyncWebServerRequest *request) {
   this->lock_();
   const MeterSnapshot snapshot = this->registers_.snapshot();
   const ModbusCounters counters = this->modbus_.counters();
-  DebugRingEntry entries[DebugRing::CAPACITY]{};
   const size_t count = this->debug_ring_.size();
-  for (size_t i = 0; i < count; i++)
-    this->debug_ring_.get_newest(i, &entries[i]);
   this->unlock_();
 
-  std::string body;
-  body.reserve(4096);
-  body += "{\"project\":\"wallbox-powerboost-emulator\",\"meter_profile\":\"EM112 PF.B\",";
-  body += "\"dsmr\":{\"net_power_w\":";
-  body += std::to_string(snapshot.grid_net_power_w);
-  body += ",\"voltage_v\":";
-  body += std::to_string(snapshot.selected_voltage_v);
-  body += ",\"current_a\":";
-  body += std::to_string(snapshot.selected_current_a);
-  body += ",\"stale\":";
-  body += snapshot.data_stale ? "true" : "false";
-  body += ",\"fail_safe\":";
-  body += snapshot.fail_safe_active ? "true" : "false";
-  body += ",\"timestamp\":\"";
-  body += snapshot.timestamp;
-  body += "\"},\"modbus\":{\"total_requests\":";
-  body += std::to_string(counters.total_requests);
-  body += ",\"crc_errors\":";
-  body += std::to_string(counters.crc_errors);
-  body += ",\"wrong_slave_ids\":";
-  body += std::to_string(counters.wrong_slave_ids);
-  body += "},\"requests\":[";
+  AsyncResponseStream *response = request->beginResponseStream("application/json");
+  response->print("{\"project\":\"wallbox-powerboost-emulator\",\"meter_profile\":\"EM112 PF.B\",");
+  response->print("\"dsmr\":{\"net_power_w\":");
+  response->printf("%.3f", snapshot.grid_net_power_w);
+  response->print(",\"voltage_v\":");
+  response->printf("%.3f", snapshot.selected_voltage_v);
+  response->print(",\"current_a\":");
+  response->printf("%.3f", snapshot.selected_current_a);
+  response->print(",\"stale\":");
+  response->print(snapshot.data_stale ? "true" : "false");
+  response->print(",\"fail_safe\":");
+  response->print(snapshot.fail_safe_active ? "true" : "false");
+  response->print(",\"timestamp\":\"");
+  write_json_escaped(response, snapshot.timestamp);
+  response->print("\"},\"modbus\":{\"total_requests\":");
+  response->print(counters.total_requests);
+  response->print(",\"crc_errors\":");
+  response->print(counters.crc_errors);
+  response->print(",\"wrong_slave_ids\":");
+  response->print(counters.wrong_slave_ids);
+  response->print("},\"requests\":[");
   for (size_t i = 0; i < count; i++) {
+    DebugRingEntry entry{};
+    this->lock_();
+    const bool ok = this->debug_ring_.get_newest(i, &entry);
+    this->unlock_();
+    if (!ok)
+      break;
     if (i > 0)
-      body += ",";
-    body += "{\"timestamp_ms\":";
-    body += std::to_string(entries[i].timestamp_ms);
-    body += ",\"slave_id\":";
-    body += std::to_string(entries[i].slave_id);
-    body += ",\"function_code\":";
-    body += std::to_string(entries[i].function_code);
-    body += ",\"start_address\":";
-    body += std::to_string(entries[i].start_address);
-    body += ",\"quantity\":";
-    body += std::to_string(entries[i].quantity);
-    body += ",\"crc_ok\":";
-    body += entries[i].crc_ok ? "true" : "false";
-    body += ",\"exception_code\":";
-    body += std::to_string(entries[i].exception_code);
-    body += ",\"response_byte_count\":";
-    body += std::to_string(entries[i].response_byte_count);
-    body += ",\"frame_hex\":\"";
-    body += entries[i].frame_hex;
-    body += "\",\"note\":\"";
-    body += entries[i].note;
-    body += "\"}";
+      response->print(',');
+    response->print("{\"timestamp_ms\":");
+    response->print(entry.timestamp_ms);
+    response->print(",\"slave_id\":");
+    response->print(entry.slave_id);
+    response->print(",\"function_code\":");
+    response->print(entry.function_code);
+    response->print(",\"start_address\":");
+    response->print(entry.start_address);
+    response->print(",\"quantity\":");
+    response->print(entry.quantity);
+    response->print(",\"crc_ok\":");
+    response->print(entry.crc_ok ? "true" : "false");
+    response->print(",\"exception_code\":");
+    response->print(entry.exception_code);
+    response->print(",\"response_byte_count\":");
+    response->print(entry.response_byte_count);
+    response->print(",\"frame_hex\":\"");
+    write_json_escaped(response, entry.frame_hex);
+    response->print("\",\"note\":\"");
+    write_json_escaped(response, entry.note);
+    response->print("\"}");
   }
-  body += "]}";
-  request->send(request->beginResponse(200, "application/json", body));
+  response->print("]}");
+  request->send(response);
 }
 
 void Em112Bridge::handle_debug_request_(AsyncWebServerRequest *request) {
   this->lock_();
   const MeterSnapshot snapshot = this->registers_.snapshot();
   const ModbusCounters counters = this->modbus_.counters();
-  DebugRingEntry entries[DebugRing::CAPACITY]{};
   const size_t count = this->debug_ring_.size();
-  for (size_t i = 0; i < count; i++)
-    this->debug_ring_.get_newest(i, &entries[i]);
   this->unlock_();
 
-  std::string body;
-  body.reserve(6144);
-  body += "<!doctype html><html><head><meta charset='utf-8'><title>wallbox-powerboost-emulator</title>";
-  body += "<style>body{font-family:sans-serif;margin:24px}table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:4px 8px}code{background:#eee;padding:2px 4px}</style>";
-  body += "</head><body><h1>wallbox-powerboost-emulator</h1>";
-  body += "<p>Experimental unofficial Carlo Gavazzi EM112 PF.B emulator. Not for billing, fiscal, reimbursement, MID, or legal metrology use.</p>";
-  body += "<h2>DSMR</h2><table><tr><th>Net power W</th><td>";
-  body += std::to_string(snapshot.grid_net_power_w);
-  body += "</td></tr><tr><th>Voltage V</th><td>";
-  body += std::to_string(snapshot.selected_voltage_v);
-  body += "</td></tr><tr><th>Current A</th><td>";
-  body += std::to_string(snapshot.selected_current_a);
-  body += "</td></tr><tr><th>Import kWh</th><td>";
-  body += std::to_string(snapshot.import_energy_kwh);
-  body += "</td></tr><tr><th>Export kWh</th><td>";
-  body += std::to_string(snapshot.export_energy_kwh);
-  body += "</td></tr><tr><th>Stale</th><td>";
-  body += snapshot.data_stale ? "true" : "false";
-  body += "</td></tr><tr><th>Fail-safe</th><td>";
-  body += snapshot.fail_safe_active ? "true" : "false";
-  body += "</td></tr></table><h2>Modbus Counters</h2><table><tr><th>Total</th><td>";
-  body += std::to_string(counters.total_requests);
-  body += "</td></tr><tr><th>CRC errors</th><td>";
-  body += std::to_string(counters.crc_errors);
-  body += "</td></tr><tr><th>Wrong slave IDs</th><td>";
-  body += std::to_string(counters.wrong_slave_ids);
-  body += "</td></tr></table><h2>Recent Requests</h2><table><tr><th>ms</th><th>slave</th><th>fc</th><th>start</th><th>qty</th><th>crc</th><th>exc</th><th>bytes</th><th>note</th><th>frame</th></tr>";
+  AsyncResponseStream *response = request->beginResponseStream("text/html");
+  response->print("<!doctype html><html><head><meta charset='utf-8'><title>wallbox-powerboost-emulator</title>");
+  response->print("<style>body{font-family:sans-serif;margin:24px}table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:4px 8px}code{background:#eee;padding:2px 4px}</style>");
+  response->print("</head><body><h1>wallbox-powerboost-emulator</h1>");
+  response->print("<p>Experimental unofficial Carlo Gavazzi EM112 PF.B emulator. Not for billing, fiscal, reimbursement, MID, or legal metrology use.</p>");
+  response->print("<h2>DSMR</h2><table><tr><th>Net power W</th><td>");
+  response->printf("%.3f", snapshot.grid_net_power_w);
+  response->print("</td></tr><tr><th>Voltage V</th><td>");
+  response->printf("%.3f", snapshot.selected_voltage_v);
+  response->print("</td></tr><tr><th>Current A</th><td>");
+  response->printf("%.3f", snapshot.selected_current_a);
+  response->print("</td></tr><tr><th>Import kWh</th><td>");
+  response->printf("%.3f", snapshot.import_energy_kwh);
+  response->print("</td></tr><tr><th>Export kWh</th><td>");
+  response->printf("%.3f", snapshot.export_energy_kwh);
+  response->print("</td></tr><tr><th>Stale</th><td>");
+  response->print(snapshot.data_stale ? "true" : "false");
+  response->print("</td></tr><tr><th>Fail-safe</th><td>");
+  response->print(snapshot.fail_safe_active ? "true" : "false");
+  response->print("</td></tr><tr><th>Timestamp</th><td>");
+  write_html_escaped(response, snapshot.timestamp);
+  response->print("</td></tr></table><h2>Modbus Counters</h2><table><tr><th>Total</th><td>");
+  response->print(counters.total_requests);
+  response->print("</td></tr><tr><th>CRC errors</th><td>");
+  response->print(counters.crc_errors);
+  response->print("</td></tr><tr><th>Wrong slave IDs</th><td>");
+  response->print(counters.wrong_slave_ids);
+  response->print("</td></tr></table><h2>Recent Requests</h2><table><tr><th>ms</th><th>slave</th><th>fc</th><th>start</th><th>qty</th><th>crc</th><th>exc</th><th>bytes</th><th>note</th><th>frame</th></tr>");
   for (size_t i = 0; i < count; i++) {
+    DebugRingEntry entry{};
+    this->lock_();
+    const bool ok = this->debug_ring_.get_newest(i, &entry);
+    this->unlock_();
+    if (!ok)
+      break;
     char hex[8];
-    snprintf(hex, sizeof(hex), "%04X", entries[i].start_address);
-    body += "<tr><td>";
-    body += std::to_string(entries[i].timestamp_ms);
-    body += "</td><td>";
-    body += std::to_string(entries[i].slave_id);
-    body += "</td><td>";
-    body += std::to_string(entries[i].function_code);
-    body += "</td><td>0x";
-    body += hex;
-    body += "</td><td>";
-    body += std::to_string(entries[i].quantity);
-    body += "</td><td>";
-    body += entries[i].crc_ok ? "ok" : "bad";
-    body += "</td><td>";
-    body += std::to_string(entries[i].exception_code);
-    body += "</td><td>";
-    body += std::to_string(entries[i].response_byte_count);
-    body += "</td><td>";
-    body += entries[i].note;
-    body += "</td><td><code>";
-    body += entries[i].frame_hex;
-    body += "</code></td></tr>";
+    snprintf(hex, sizeof(hex), "%04X", entry.start_address);
+    response->print("<tr><td>");
+    response->print(entry.timestamp_ms);
+    response->print("</td><td>");
+    response->print(entry.slave_id);
+    response->print("</td><td>");
+    response->print(entry.function_code);
+    response->print("</td><td>0x");
+    response->print(hex);
+    response->print("</td><td>");
+    response->print(entry.quantity);
+    response->print("</td><td>");
+    response->print(entry.crc_ok ? "ok" : "bad");
+    response->print("</td><td>");
+    response->print(entry.exception_code);
+    response->print("</td><td>");
+    response->print(entry.response_byte_count);
+    response->print("</td><td>");
+    write_html_escaped(response, entry.note);
+    response->print("</td><td><code>");
+    write_html_escaped(response, entry.frame_hex);
+    response->print("</code></td></tr>");
   }
-  body += "</table><p><a href='/debug.json'>debug.json</a></p></body></html>";
-  request->send(request->beginResponse(200, "text/html", body));
+  response->print("</table><p><a href='/debug.json'>debug.json</a></p></body></html>");
+  request->send(response);
 }
 #endif
 
