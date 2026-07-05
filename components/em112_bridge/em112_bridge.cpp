@@ -545,7 +545,7 @@ void Em112Bridge::handle_debug_json_request_(AsyncWebServerRequest *request) {
     if (!ok)
       break;
     if (i > 0)
-      response->print(',');
+      response->print(",");
     response->print("{\"timestamp_ms\":");
     response->print(entry.timestamp_ms);
     response->print(",\"slave_id\":");
