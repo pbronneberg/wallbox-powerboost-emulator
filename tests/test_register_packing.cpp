@@ -155,6 +155,63 @@ void test_unknown_and_stale() {
   require(model.snapshot().fail_safe_active, "fail-safe active");
 }
 
+// Real-world snapshot captured from dsmr-api.local on 2026-07-05:
+// power_delivered=0.000 kW, power_returned=0.123 kW (solar export),
+// current_l1=3 A (apparent/reactive current present despite low real power).
+// mbus1..4 and gas_delivered fields are silently ignored.
+void test_realworld_export_snapshot() {
+  const char *json =
+      "{\"actual\":["
+      "{\"name\":\"timestamp\",\"value\":\"260705102353S\"},"
+      "{\"name\":\"energy_delivered_tariff1\",\"value\":16164.660,\"unit\":\"kWh\"},"
+      "{\"name\":\"energy_delivered_tariff2\",\"value\":11121.743,\"unit\":\"kWh\"},"
+      "{\"name\":\"energy_returned_tariff1\",\"value\":6298.306,\"unit\":\"kWh\"},"
+      "{\"name\":\"energy_returned_tariff2\",\"value\":15964.774,\"unit\":\"kWh\"},"
+      "{\"name\":\"power_delivered\",\"value\":0.000,\"unit\":\"kW\"},"
+      "{\"name\":\"power_returned\",\"value\":0.123,\"unit\":\"kW\"},"
+      "{\"name\":\"voltage_l1\",\"value\":230.000,\"unit\":\"V\"},"
+      "{\"name\":\"current_l1\",\"value\":3.000,\"unit\":\"A\"},"
+      "{\"name\":\"power_delivered_l1\",\"value\":0.000,\"unit\":\"kW\"},"
+      "{\"name\":\"power_returned_l1\",\"value\":0.123,\"unit\":\"kW\"},"
+      "{\"name\":\"mbus1_delivered\",\"value\":10729.790,\"unit\":\"m3\"},"
+      "{\"name\":\"mbus2_delivered\",\"value\":0.000,\"unit\":\"GJ\"},"
+      "{\"name\":\"mbus3_delivered\",\"value\":0.000,\"unit\":\"m3\"},"
+      "{\"name\":\"mbus4_delivered\",\"value\":0.000,\"unit\":\"m3\"},"
+      "{\"name\":\"gas_delivered\",\"value\":10729.789,\"unit\":\"m3\"}"
+      "]}";
+
+  DsmrActualValues actual{};
+  char error[96]{};
+  require(parse_dsmr_actual_json(json, &actual, error, sizeof(error)), error);
+
+  require(std::strcmp(actual.timestamp, "260705102353S") == 0, "realworld timestamp");
+  require(actual.power_delivered.available, "power_delivered available (zero is valid)");
+  require_close(actual.power_delivered.value, 0.0f, 0.001f, "power_delivered zero");
+  require_close(actual.power_returned.value, 0.123f, 0.001f, "power_returned 0.123 kW");
+  require_close(actual.power_returned_l1.value, 0.123f, 0.001f, "power_returned_l1 0.123 kW");
+  require_close(actual.current_l1.value, 3.0f, 0.001f, "current_l1 3 A");
+  require_close(actual.voltage_l1.value, 230.0f, 0.1f, "voltage_l1 230 V");
+  require_close(actual.energy_delivered_tariff1.value, 16164.660f, 0.01f, "energy_delivered_tariff1");
+  require_close(actual.energy_returned_tariff2.value, 15964.774f, 0.01f, "energy_returned_tariff2");
+
+  // Register model: L1 phase selected, net power is export (-123 W).
+  MeterRuntimeConfig config{};
+  config.source_phase = SourcePhase::L1;
+  Em112RegisterModel model;
+  model.update_from_dsmr(actual, config, 5000, true);
+
+  require_close(model.snapshot().grid_net_power_w, -123.0f, 0.5f, "realworld net power export");
+  require_close(model.snapshot().grid_export_power_w, 123.0f, 0.5f, "realworld export power");
+  require_close(model.snapshot().grid_import_power_w, 0.0f, 0.1f, "realworld import power zero");
+
+  // Emulator uses DSMR current_l1 (3 A apparent) because it exceeds calculated (0.53 A).
+  require_close(model.snapshot().selected_current_a, 3.0f, 0.01f, "realworld apparent current wins");
+
+  // Total energy accumulators.
+  require_close(model.snapshot().import_energy_kwh, 16164.660f + 11121.743f, 0.1f, "realworld import energy total");
+  require_close(model.snapshot().export_energy_kwh, 6298.306f + 15964.774f, 0.1f, "realworld export energy total");
+}
+
 }  // namespace
 
 int main() {
@@ -164,6 +221,7 @@ int main() {
   test_scaling_and_packing();
   test_crc_and_fc03();
   test_unknown_and_stale();
+  test_realworld_export_snapshot();
   std::puts("All host tests passed");
   return 0;
 }
