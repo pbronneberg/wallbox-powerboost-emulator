@@ -25,19 +25,52 @@ class ReadCheck:
     scale: float = 1.0
     signed: bool = False
     unit: str = ""
+    expected_raw: int | None = None
 
 
-CHECKS = (
+EM112_CHECKS = (
     ReadCheck("voltage_l_n", 0x03, 0x0000, 2, 10.0, False, "V"),
     ReadCheck("current", 0x03, 0x0002, 2, 1000.0, False, "A"),
     ReadCheck("active_power", 0x03, 0x0004, 2, 10.0, True, "W"),
     ReadCheck("apparent_power", 0x03, 0x0006, 2, 10.0, False, "VA"),
-    ReadCheck("product_id", 0x03, 0x000B, 1, 1.0, False, ""),
+    ReadCheck("product_id", 0x03, 0x000B, 1, 1.0, False, "", 104),
     ReadCheck("power_factor", 0x04, 0x000E, 1, 1000.0, True, ""),
     ReadCheck("frequency", 0x04, 0x000F, 1, 10.0, False, "Hz"),
     ReadCheck("import_energy", 0x04, 0x0010, 2, 1000.0, False, "kWh"),
     ReadCheck("export_energy", 0x04, 0x0020, 2, 1000.0, False, "kWh"),
 )
+
+EM330_CHECKS = (
+    ReadCheck("voltage_l_n", 0x03, 0x0000, 2, 10.0, False, "V"),
+    ReadCheck("current", 0x03, 0x000C, 2, 1000.0, True, "A"),
+    ReadCheck("active_power", 0x03, 0x0028, 2, 10.0, True, "W"),
+    ReadCheck("product_id", 0x03, 0x000B, 1, 1.0, False, "", 332),
+    ReadCheck("power_factor", 0x04, 0x0031, 1, 1000.0, True, ""),
+    ReadCheck("frequency", 0x04, 0x0033, 1, 10.0, False, "Hz"),
+    ReadCheck("import_energy", 0x04, 0x0500, 4, 1000.0, False, "kWh"),
+    ReadCheck("export_energy", 0x04, 0x051C, 4, 1000.0, False, "kWh"),
+    ReadCheck("measurement_mode", 0x04, 0x1103, 1, 1.0, False, "", 1),
+)
+
+EM530_CHECKS = tuple(
+    ReadCheck(
+        check.label,
+        check.function,
+        check.start,
+        check.quantity,
+        check.scale,
+        check.signed,
+        check.unit,
+        1744 if check.label == "product_id" else 2 if check.label == "measurement_mode" else check.expected_raw,
+    )
+    for check in EM330_CHECKS
+)
+
+CHECKS_BY_PROFILE = {
+    "em112_pfb": EM112_CHECKS,
+    "em330_av5": EM330_CHECKS,
+    "em530_av5": EM530_CHECKS,
+}
 
 
 def crc16_modbus(data: bytes) -> int:
@@ -109,7 +142,12 @@ def decode_value(words: list[int], signed: bool) -> int:
         if signed and raw & 0x80000000:
             raw -= 0x100000000
         return raw
-    raise ValueError(f"expected one or two registers, got {len(words)}")
+    if len(words) == 4:
+        raw = words[0] | (words[1] << 16) | (words[2] << 32) | (words[3] << 48)
+        if signed and raw & 0x8000000000000000:
+            raw -= 0x10000000000000000
+        return raw
+    raise ValueError(f"expected one, two, or four registers, got {len(words)}")
 
 
 def read_registers(
@@ -142,6 +180,9 @@ def read_registers(
     payload = response[3 : 3 + byte_count]
     words = decode_words(payload)
     raw = decode_value(words, check.signed)
+    if check.expected_raw is not None and raw != check.expected_raw:
+        print(f"FAIL {check.label}: raw={raw} expected={check.expected_raw} regs={words}")
+        return False
     value = raw / check.scale
     if measurements is not None:
         measurements[check.label] = value
@@ -162,11 +203,12 @@ def evaluate_solar_threshold(measurements: dict[str, float], threshold_a: float)
 
     export_w = max(-active_power, 0.0)
     required_export_w = voltage * threshold_a
-    current_ok = current >= threshold_a
+    current_magnitude = abs(current)
+    current_ok = current_magnitude >= threshold_a
     export_ok = export_w >= required_export_w
     passed = current_ok and export_ok
     summary = (
-        f"threshold={threshold_a:g}A current={current:g}A export={export_w:g}W "
+        f"threshold={threshold_a:g}A current={current:g}A magnitude={current_magnitude:g}A export={export_w:g}W "
         f"required_export={required_export_w:g}W current_ok={current_ok} export_ok={export_ok}"
     )
     return passed, summary
@@ -178,6 +220,7 @@ def verify_export_energy_motion(
     timeout: float,
     measurements: dict[str, float],
     interval_s: float,
+    checks: tuple[ReadCheck, ...],
 ) -> tuple[bool, str]:
     initial_kwh = measurements.get("export_energy")
     active_power_w = measurements.get("active_power")
@@ -188,7 +231,7 @@ def verify_export_energy_motion(
 
     time.sleep(interval_s)
     follow_up: dict[str, float] = {}
-    export_check = next(check for check in CHECKS if check.label == "export_energy")
+    export_check = next(check for check in checks if check.label == "export_energy")
     if not read_registers(port, slave, export_check, timeout, follow_up):
         return False, "follow-up export-energy read failed"
 
@@ -228,6 +271,12 @@ def parse_args() -> argparse.Namespace:
         help="Serial port for the USB-RS485 adapter, for example /dev/ttyUSB0 or /dev/cu.usbserial-0001.",
     )
     parser.add_argument("--slave", type=int, default=1, help="Modbus slave address. Default: 1.")
+    parser.add_argument(
+        "--profile",
+        choices=tuple(CHECKS_BY_PROFILE),
+        default="em112_pfb",
+        help="Emulated meter profile to verify. Default: em112_pfb.",
+    )
     parser.add_argument("--baud", type=int, default=9600, help="Modbus baud rate. Default: 9600.")
     parser.add_argument("--parity", choices=("N", "E"), default="N", help="Serial parity: N or E. Default: N.")
     parser.add_argument("--stop-bits", type=int, choices=(1, 2), default=1, help="Serial stop bits. Default: 1.")
@@ -279,7 +328,8 @@ def main() -> int:
         passed = 0
         total = 0
         measurements: dict[str, float] = {}
-        for check in CHECKS:
+        checks = CHECKS_BY_PROFILE[args.profile]
+        for check in checks:
             total += 1
             passed += int(read_registers(port, args.slave, check, args.timeout, measurements))
         if not args.skip_fc08:
@@ -303,6 +353,7 @@ def main() -> int:
                 args.timeout,
                 measurements,
                 args.verify_export_motion_seconds,
+                checks,
             )
             if ok:
                 print(f"OK   export_motion   {summary}")

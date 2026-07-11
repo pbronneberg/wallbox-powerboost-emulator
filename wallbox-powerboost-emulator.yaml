@@ -8,13 +8,14 @@ substitutions:
   modbus_parity: NONE
   modbus_stop_bits: "1"
   modbus_slave_id: "1"
+  meter_profile: em112_pfb
   dsmr_default_url: http://dsmr-api.local/api/v1/sm/actual
   fallback_ap_password: change-me-please
 
 esphome:
   name: ${project_name}
   friendly_name: ${friendly_name}
-  comment: Unofficial experimental Carlo Gavazzi EM112 PF.B emulator for Wallbox Power Boost
+  comment: Unofficial experimental Carlo Gavazzi meter emulator for Wallbox Power Boost
   project:
     name: nly96192.wallbox-powerboost-emulator
     version: "0.1.0"
@@ -67,6 +68,7 @@ em112_bridge:
   stale_timeout: 30s
   fail_safe_import_power: 7000
   source_phase: l1
+  meter_profile: ${meter_profile}
   modbus_slave_id: ${modbus_slave_id}
   strict_exceptions: false
   debug_logging: false
@@ -143,6 +145,8 @@ em112_bridge:
     name: DSMR Last Error
   selected_source_phase:
     name: Selected Source Phase
+  selected_meter_profile:
+    name: Selected Meter Profile
   last_modbus_request_summary:
     name: Last Modbus Request Summary
   last_modbus_frame_hex:
@@ -216,6 +220,18 @@ number:
       - lambda: id(wallbox_powerboost_emulator_component).set_poll_interval_seconds((uint32_t) x);
 
 select:
+  - platform: template
+    name: Meter Profile
+    entity_category: config
+    options:
+      - em112_pfb
+      - em330_av5
+      - em530_av5
+    initial_option: ${meter_profile}
+    optimistic: true
+    restore_value: true
+    set_action:
+      - lambda: id(wallbox_powerboost_emulator_component).set_meter_profile_string(x.c_str());
   - platform: template
     name: Source Phase Mode
     entity_category: config

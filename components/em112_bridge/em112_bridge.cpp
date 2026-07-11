@@ -228,6 +228,12 @@ void Em112Bridge::set_source_phase_string(const char *phase) {
   this->runtime_config_.source_phase = source_phase_from_string(phase, this->runtime_config_.source_phase);
 }
 
+void Em112Bridge::set_meter_profile_string(const char *profile) {
+  this->lock_();
+  this->registers_.set_profile(meter_profile_from_string(profile, this->registers_.profile()));
+  this->unlock_();
+}
+
 void Em112Bridge::set_simulate_solar_insufficient(bool enabled) {
   this->lock_();
   if (enabled) {
@@ -436,6 +442,7 @@ void Em112Bridge::publish_entities_() {
   char last_error[sizeof(this->dsmr_last_error_)]{};
   strncpy(last_error, this->dsmr_last_error_, sizeof(last_error) - 1);
   const SourcePhase phase = this->runtime_config_.source_phase;
+  const MeterProfile profile = this->registers_.profile();
   this->unlock_();
 
   const uint32_t now = now_ms();
@@ -484,6 +491,7 @@ void Em112Bridge::publish_entities_() {
   publish_text(this->dsmr_last_timestamp_sensor_, snapshot.timestamp);
   publish_text(this->dsmr_last_error_sensor_, last_error);
   publish_text(this->selected_source_phase_sensor_, source_phase_to_string(phase));
+  publish_text(this->selected_meter_profile_sensor_, meter_profile_to_string(profile));
 
   if (has_latest) {
     char summary[96]{};
@@ -606,6 +614,7 @@ void Em112Bridge::handle_debug_json_request_(AsyncWebServerRequest *request) {
   const ModbusCounters counters = this->modbus_.counters();
   const size_t count = this->debug_ring_.size();
   const char *override_mode = this->override_mode_to_string_();
+  const MeterProfile profile = this->registers_.profile();
   this->unlock_();
 
   const bool threshold_15_ok = solar_threshold_ok(snapshot, 1.5f);
@@ -613,7 +622,9 @@ void Em112Bridge::handle_debug_json_request_(AsyncWebServerRequest *request) {
   const float export_w = snapshot.grid_net_power_w < 0.0f ? -snapshot.grid_net_power_w : 0.0f;
 
   AsyncResponseStream *response = request->beginResponseStream("application/json");
-  response->print("{\"project\":\"wallbox-powerboost-emulator\",\"meter_profile\":\"EM112 PF.B\",");
+  response->print("{\"project\":\"wallbox-powerboost-emulator\",\"meter_profile\":\"");
+  write_json_escaped(response, meter_profile_display_name(profile));
+  response->print("\",");
   response->print("\"dsmr\":{\"net_power_w\":");
   response->printf("%.3f", snapshot.grid_net_power_w);
   response->print(",\"voltage_v\":");
@@ -682,6 +693,7 @@ void Em112Bridge::handle_debug_request_(AsyncWebServerRequest *request) {
   const ModbusCounters counters = this->modbus_.counters();
   const size_t count = this->debug_ring_.size();
   const char *override_mode = this->override_mode_to_string_();
+  const MeterProfile profile = this->registers_.profile();
   this->unlock_();
 
   const bool threshold_15_ok = solar_threshold_ok(snapshot, 1.5f);
@@ -692,7 +704,9 @@ void Em112Bridge::handle_debug_request_(AsyncWebServerRequest *request) {
   response->print("<!doctype html><html><head><meta charset='utf-8'><title>wallbox-powerboost-emulator</title>");
   response->print("<style>body{font-family:sans-serif;margin:24px}table{border-collapse:collapse}td,th{border:1px solid #ccc;padding:4px 8px}code{background:#eee;padding:2px 4px}</style>");
   response->print("</head><body><h1>wallbox-powerboost-emulator</h1>");
-  response->print("<p>Experimental unofficial Carlo Gavazzi EM112 PF.B emulator. Not for billing, fiscal, reimbursement, MID, or legal metrology use.</p>");
+  response->print("<p>Experimental unofficial Carlo Gavazzi meter emulator. Active profile: <strong>");
+  write_html_escaped(response, meter_profile_display_name(profile));
+  response->print("</strong>. Not for billing, fiscal, reimbursement, MID, or legal metrology use.</p>");
   response->print("<h2>DSMR</h2><table><tr><th>Net power W</th><td>");
   response->printf("%.3f", snapshot.grid_net_power_w);
   response->print("</td></tr><tr><th>Voltage V</th><td>");

@@ -43,6 +43,7 @@ class Em112Bridge : public Component, public uart::UARTDevice {
   void set_stale_timeout_seconds(uint32_t seconds) { runtime_config_.stale_timeout_s = seconds; }
   void set_fail_safe_import_power(float watts) { runtime_config_.fail_safe_import_power_w = watts; }
   void set_source_phase_string(const char *phase);
+  void set_meter_profile_string(const char *profile);
   void set_modbus_slave_id(uint8_t slave_id) { modbus_settings_.slave_id = slave_id; }
   void set_strict_exceptions(bool strict) { modbus_settings_.strict_exceptions = strict; }
   void set_debug_logging(bool enabled) { debug_logging_ = enabled; }
@@ -90,6 +91,7 @@ class Em112Bridge : public Component, public uart::UARTDevice {
   void set_dsmr_last_timestamp_text_sensor(text_sensor::TextSensor *sensor) { dsmr_last_timestamp_sensor_ = sensor; }
   void set_dsmr_last_error_text_sensor(text_sensor::TextSensor *sensor) { dsmr_last_error_sensor_ = sensor; }
   void set_selected_source_phase_text_sensor(text_sensor::TextSensor *sensor) { selected_source_phase_sensor_ = sensor; }
+  void set_selected_meter_profile_text_sensor(text_sensor::TextSensor *sensor) { selected_meter_profile_sensor_ = sensor; }
   void set_last_modbus_request_summary_text_sensor(text_sensor::TextSensor *sensor) {
     last_modbus_request_summary_sensor_ = sensor;
   }
@@ -186,6 +188,7 @@ class Em112Bridge : public Component, public uart::UARTDevice {
   text_sensor::TextSensor *dsmr_last_timestamp_sensor_{nullptr};
   text_sensor::TextSensor *dsmr_last_error_sensor_{nullptr};
   text_sensor::TextSensor *selected_source_phase_sensor_{nullptr};
+  text_sensor::TextSensor *selected_meter_profile_sensor_{nullptr};
   text_sensor::TextSensor *last_modbus_request_summary_sensor_{nullptr};
   text_sensor::TextSensor *last_modbus_frame_hex_sensor_{nullptr};
   text_sensor::TextSensor *last_requested_register_range_sensor_{nullptr};

@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 
 using namespace esphome::em112_bridge;
 
@@ -288,6 +289,55 @@ void test_solar_threshold_fixtures() {
   require(current_word == 7500, "fixture B current register is 7.500 A");
 }
 
+void test_em330_and_em530_profiles() {
+  DsmrActualValues actual = sample_actual();
+  actual.power_delivered.value = 0.0f;
+  actual.power_returned.value = 2.75f;
+  actual.power_delivered_l1.value = 0.0f;
+  actual.power_returned_l1.value = 2.75f;
+
+  MeterRuntimeConfig config{};
+  config.source_phase = SourcePhase::L1;
+  Em112RegisterModel model;
+  model.update_from_dsmr(actual, config, 9000, true);
+
+  for (MeterProfile profile : {MeterProfile::EM330_AV5, MeterProfile::EM530_AV5}) {
+    model.set_profile(profile);
+    uint16_t words[4]{};
+
+    require(model.read_registers(0x000B, 1, words, 4, true), "three-phase product ID read");
+    require(words[0] == (profile == MeterProfile::EM330_AV5 ? 332 : 1744), "profile-specific product ID");
+
+    require(model.read_registers(0x000A, 2, words, 4, true), "overlapping L3-L1 voltage pair read");
+    require(words[0] == 0 && words[1] == 0, "L3-L1 pair is zero, not product ID");
+
+    require(model.read_registers(0x000C, 2, words, 4, true), "L1 current read");
+    require((static_cast<uint32_t>(words[1]) << 16 | words[0]) == 11925U,
+            "L1 current remains a positive RMS magnitude during export");
+
+    require(model.read_registers(0x0012, 2, words, 4, true), "L1 active power read");
+    require((static_cast<uint32_t>(words[1]) << 16 | words[0]) == static_cast<uint32_t>(-27500),
+            "L1 active power is signed export");
+
+    require(model.read_registers(0x0034, 2, words, 4, true), "legacy import energy read");
+    require((static_cast<uint32_t>(words[1]) << 16 | words[0]) == 33456U, "legacy import energy kWh x10");
+    require(model.read_registers(0x004E, 2, words, 4, true), "legacy export energy read");
+    require((static_cast<uint32_t>(words[1]) << 16 | words[0]) == 1234U, "legacy export energy kWh x10");
+
+    require(model.read_registers(0x0500, 4, words, 4, true), "Wh-resolution import energy read");
+    const uint64_t import_wh = static_cast<uint64_t>(words[0]) | (static_cast<uint64_t>(words[1]) << 16) |
+                               (static_cast<uint64_t>(words[2]) << 32) | (static_cast<uint64_t>(words[3]) << 48);
+    require(import_wh == 3345600ULL, "Wh-resolution import counter is LSW-first");
+
+    require(model.read_registers(0x1103, 1, words, 4, true), "measurement mode read");
+    require(words[0] == (profile == MeterProfile::EM330_AV5 ? 1 : 2), "profile is bidirectional mode");
+  }
+
+  require(std::strcmp(meter_profile_to_string(MeterProfile::EM330_AV5), "em330_av5") == 0,
+          "EM330 profile string");
+  require(meter_profile_from_string("em530_av5") == MeterProfile::EM530_AV5, "EM530 profile parse");
+}
+
 }  // namespace
 
 int main() {
@@ -299,6 +349,7 @@ int main() {
   test_unknown_and_stale();
   test_realworld_export_snapshot();
   test_solar_threshold_fixtures();
+  test_em330_and_em530_profiles();
   std::puts("All host tests passed");
   return 0;
 }

@@ -102,6 +102,30 @@ void set_optional(OptionalFloat *target, const char *raw_value) {
   }
 }
 
+void set_optional(OptionalDouble *target, const char *raw_value) {
+  if (raw_value == nullptr) {
+    target->available = false;
+    target->value = 0.0;
+    return;
+  }
+  const char *p = skip_ws(raw_value);
+  if (*p == '\0' || strcmp(p, "-") == 0 || strncmp(p, "null", 4) == 0) {
+    target->available = false;
+    target->value = 0.0;
+    return;
+  }
+  char *end = nullptr;
+  const double parsed = strtod(p, &end);
+  if (end == p || !isfinite(parsed)) {
+    target->available = false;
+    target->value = 0.0;
+    return;
+  }
+  end = const_cast<char *>(skip_ws(end));
+  target->available = *end == '\0';
+  target->value = target->available ? parsed : 0.0;
+}
+
 void assign_field(DsmrActualValues *out, const char *name, const char *value) {
   if (strcmp(name, "timestamp") == 0) {
     strncpy(out->timestamp, value, sizeof(out->timestamp) - 1);

@@ -33,6 +33,7 @@ CONF_POLL_INTERVAL = "poll_interval"
 CONF_STALE_TIMEOUT = "stale_timeout"
 CONF_FAIL_SAFE_IMPORT_POWER = "fail_safe_import_power"
 CONF_SOURCE_PHASE = "source_phase"
+CONF_METER_PROFILE = "meter_profile"
 CONF_MODBUS_SLAVE_ID = "modbus_slave_id"
 CONF_STRICT_EXCEPTIONS = "strict_exceptions"
 CONF_DEBUG_LOGGING = "debug_logging"
@@ -88,6 +89,7 @@ TEXT_SENSORS = {
     "dsmr_last_timestamp": "set_dsmr_last_timestamp_text_sensor",
     "dsmr_last_error": "set_dsmr_last_error_text_sensor",
     "selected_source_phase": "set_selected_source_phase_text_sensor",
+    "selected_meter_profile": "set_selected_meter_profile_text_sensor",
     "last_modbus_request_summary": "set_last_modbus_request_summary_text_sensor",
     "last_modbus_frame_hex": "set_last_modbus_frame_hex_text_sensor",
     "last_requested_register_range": "set_last_requested_register_range_text_sensor",
@@ -116,6 +118,9 @@ CONFIG_SCHEMA = (
             cv.Optional(CONF_STALE_TIMEOUT, default="30s"): cv.positive_time_period_milliseconds,
             cv.Optional(CONF_FAIL_SAFE_IMPORT_POWER, default=7000): cv.float_range(min=0, max=25000),
             cv.Optional(CONF_SOURCE_PHASE, default="l1"): cv.one_of("total", "l1", "l2", "l3", lower=True),
+            cv.Optional(CONF_METER_PROFILE, default="em112_pfb"): cv.one_of(
+                "em112_pfb", "em330_av5", "em530_av5", lower=True
+            ),
             cv.Optional(CONF_MODBUS_SLAVE_ID, default=1): cv.int_range(min=1, max=247),
             cv.Optional(CONF_STRICT_EXCEPTIONS, default=False): cv.boolean,
             cv.Optional(CONF_DEBUG_LOGGING, default=False): cv.boolean,
@@ -170,6 +175,7 @@ async def to_code(config):
     cg.add(var.set_stale_timeout(config[CONF_STALE_TIMEOUT].total_milliseconds))
     cg.add(var.set_fail_safe_import_power(config[CONF_FAIL_SAFE_IMPORT_POWER]))
     cg.add(var.set_source_phase_string(config[CONF_SOURCE_PHASE]))
+    cg.add(var.set_meter_profile_string(config[CONF_METER_PROFILE]))
     cg.add(var.set_modbus_slave_id(config[CONF_MODBUS_SLAVE_ID]))
     cg.add(var.set_strict_exceptions(config[CONF_STRICT_EXCEPTIONS]))
     cg.add(var.set_debug_logging(config[CONF_DEBUG_LOGGING]))

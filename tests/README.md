@@ -5,7 +5,8 @@ The host-side tests cover the pure logic that should stay independent from ESPHo
 - DSMRloggerAPI `actual` parsing.
 - Missing value handling.
 - Net power sign and phase fallback.
-- EM112 PF.B scaling and LSW/MSW packing.
+- EM112 PF.B, EM330, and EM530 scaling, product identification, bidirectional mode, and LSW/MSW packing.
+- Request-range-aware handling of the overlapping EM330/EM530 `0x000B` register.
 - Modbus RTU CRC and FC03/FC04 responses.
 - Courtesy unknown register behavior.
 - Stale data fail-safe behavior.
