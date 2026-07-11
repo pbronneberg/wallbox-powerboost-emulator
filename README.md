@@ -175,8 +175,8 @@ Only this zero-based physical Modbus register subset is implemented:
 | `0x000B` | 1 | Carlo Gavazzi product ID | `104` |
 | `0x000E` | 1 | power factor | `INT16`, PF x 1000, default 1000 |
 | `0x000F` | 1 | frequency | `INT16`, Hz x 10, default 500 |
-| `0x0010` | 2 | imported energy | `INT32`, kWh x 10 |
-| `0x0020` | 2 | exported energy | `INT32`, kWh x 10 |
+| `0x0010` | 2 | imported energy | `INT32`, kWh x 1000 |
+| `0x0020` | 2 | exported energy | `INT32`, kWh x 1000 |
 
 32-bit values are packed LSW first, then MSW. Each 16-bit word is transmitted MSB first, then LSB, as required by Modbus RTU.
 
@@ -185,7 +185,7 @@ Examples:
 - `230.6 V -> 2306`
 - `6.321 A -> 6321`
 - `-1450 W -> -14500`
-- `12345.6 kWh -> 123456`
+- `12345.678 kWh -> 12345678`
 
 ## Modbus Behavior
 
@@ -247,9 +247,17 @@ To check the solar-threshold scenarios from the same fixture set, pass the extra
 make smoke PORT=/dev/ttyUSB0 SMOKE_ARGS='--solar-threshold-a 1.5 --solar-threshold-a 6.0'
 ```
 
+To verify the PF.B exported-energy counter is moving during live export, add a timed second read:
+
+```bash
+make smoke PORT=/dev/ttyUSB0 SMOKE_ARGS='--verify-export-motion-seconds 10'
+```
+
 It checks FC03/FC04 reads for the implemented EM112 PF.B registers and FC08 Return Query Data. It is intentionally separate from `make check` because it requires a flashed board and a physical USB-RS485 adapter.
 
 The additional solar-threshold checks are based on the live Modbus reads: they verify that the measured current is at least the requested threshold and that export power is at least voltage times threshold. The 1.5 A case is the more permissive baseline; the 6.0 A case matches the commonly documented Wallbox smart/solar floor.
+
+The export-motion check requires negative active power, waits for the requested interval, and verifies that exported energy advances by at least the EM112 PF.B serial resolution of 0.001 kWh. A live capture on 2026-07-11 advanced from 22300.852 to 22300.859 kWh over 10 seconds at approximately 2.63 kW export.
 
 If the Wallbox polls unknown registers, enable debug logging and inspect `/debug`. Unknown registers return `0` unless strict mode is enabled.
 

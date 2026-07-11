@@ -106,7 +106,9 @@ void test_scaling_and_packing() {
   require(model.read_register(0x000B, &value, true), "product id");
   require(value == 104, "product ID 104");
   require(model.read_register(0x0010, &value, true), "import energy");
-  require(value == 33456, "import energy kWh x10");
+  require(value == 3264, "import energy low word at kWh x1000");
+  require(model.read_register(0x0011, &value, true), "import energy high word");
+  require(value == 51, "import energy high word at kWh x1000");
 
   uint16_t low = 0;
   uint16_t high = 0;

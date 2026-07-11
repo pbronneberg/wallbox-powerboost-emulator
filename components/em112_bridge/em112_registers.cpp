@@ -192,12 +192,12 @@ bool Em112RegisterModel::read_register(uint16_t address, uint16_t *value, bool s
       return true;
     case 0x0010:
     case 0x0011:
-      pack_u32_lsw_first(scale_u32(snapshot_.import_energy_kwh * 10.0f), &low, &high);
+      pack_u32_lsw_first(scale_u32(snapshot_.import_energy_kwh * 1000.0f), &low, &high);
       *value = address == 0x0010 ? low : high;
       return true;
     case 0x0020:
     case 0x0021:
-      pack_u32_lsw_first(scale_u32(snapshot_.export_energy_kwh * 10.0f), &low, &high);
+      pack_u32_lsw_first(scale_u32(snapshot_.export_energy_kwh * 1000.0f), &low, &high);
       *value = address == 0x0020 ? low : high;
       return true;
     default:

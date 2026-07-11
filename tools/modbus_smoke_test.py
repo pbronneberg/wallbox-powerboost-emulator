@@ -35,8 +35,8 @@ CHECKS = (
     ReadCheck("product_id", 0x03, 0x000B, 1, 1.0, False, ""),
     ReadCheck("power_factor", 0x04, 0x000E, 1, 1000.0, True, ""),
     ReadCheck("frequency", 0x04, 0x000F, 1, 10.0, False, "Hz"),
-    ReadCheck("import_energy", 0x04, 0x0010, 2, 10.0, False, "kWh"),
-    ReadCheck("export_energy", 0x04, 0x0020, 2, 10.0, False, "kWh"),
+    ReadCheck("import_energy", 0x04, 0x0010, 2, 1000.0, False, "kWh"),
+    ReadCheck("export_energy", 0x04, 0x0020, 2, 1000.0, False, "kWh"),
 )
 
 
@@ -172,6 +172,36 @@ def evaluate_solar_threshold(measurements: dict[str, float], threshold_a: float)
     return passed, summary
 
 
+def verify_export_energy_motion(
+    port: serial.Serial,
+    slave: int,
+    timeout: float,
+    measurements: dict[str, float],
+    interval_s: float,
+) -> tuple[bool, str]:
+    initial_kwh = measurements.get("export_energy")
+    active_power_w = measurements.get("active_power")
+    if initial_kwh is None or active_power_w is None:
+        return False, "missing initial export_energy/active_power readings"
+    if active_power_w >= 0.0:
+        return False, f"active_power={active_power_w:g}W is not export"
+
+    time.sleep(interval_s)
+    follow_up: dict[str, float] = {}
+    export_check = next(check for check in CHECKS if check.label == "export_energy")
+    if not read_registers(port, slave, export_check, timeout, follow_up):
+        return False, "follow-up export-energy read failed"
+
+    final_kwh = follow_up["export_energy"]
+    delta_kwh = final_kwh - initial_kwh
+    expected_kwh = (-active_power_w * interval_s) / 3_600_000.0
+    passed = delta_kwh >= 0.001
+    return passed, (
+        f"interval={interval_s:g}s initial={initial_kwh:.3f}kWh final={final_kwh:.3f}kWh "
+        f"delta={delta_kwh:.3f}kWh expected_approx={expected_kwh:.3f}kWh"
+    )
+
+
 def run_diagnostics_echo(port: serial.Serial, slave: int, timeout: float) -> bool:
     payload = bytes.fromhex("12 34")
     pdu = bytes((slave, 0x08)) + struct.pack(">H", 0x0000) + payload
@@ -213,6 +243,15 @@ def parse_args() -> argparse.Namespace:
             "Pass multiple times for multiple thresholds, for example --solar-threshold-a 1.5 --solar-threshold-a 6.0."
         ),
     )
+    parser.add_argument(
+        "--verify-export-motion-seconds",
+        type=float,
+        metavar="SECONDS",
+        help=(
+            "During live export, wait this many seconds and require the EM112 PF.B exported-energy "
+            "register to advance by at least 0.001 kWh. A value around 10 seconds is practical."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -220,6 +259,9 @@ def main() -> int:
     args = parse_args()
     if not 1 <= args.slave <= 247:
         print("--slave must be between 1 and 247", file=sys.stderr)
+        return 2
+    if args.verify_export_motion_seconds is not None and args.verify_export_motion_seconds <= 0:
+        print("--verify-export-motion-seconds must be greater than zero", file=sys.stderr)
         return 2
 
     parity = serial.PARITY_EVEN if args.parity == "E" else serial.PARITY_NONE
@@ -252,6 +294,21 @@ def main() -> int:
                 passed += 1
             else:
                 print(f"FAIL solar_threshold threshold={threshold:g}A {summary}")
+
+        if args.verify_export_motion_seconds is not None:
+            total += 1
+            ok, summary = verify_export_energy_motion(
+                port,
+                args.slave,
+                args.timeout,
+                measurements,
+                args.verify_export_motion_seconds,
+            )
+            if ok:
+                print(f"OK   export_motion   {summary}")
+                passed += 1
+            else:
+                print(f"FAIL export_motion   {summary}")
 
     print(f"\n{passed}/{total} Modbus smoke checks passed")
     return 0 if passed == total else 1
