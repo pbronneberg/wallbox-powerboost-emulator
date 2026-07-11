@@ -26,6 +26,12 @@ namespace em112_bridge {
 
 class Em112Bridge : public Component, public uart::UARTDevice {
  public:
+  enum class OverrideMode : uint8_t {
+    LIVE = 0,
+    INSUFFICIENT = 1,
+    SUFFICIENT = 2,
+  };
+
   void setup() override;
   void loop() override;
   float get_setup_priority() const override { return setup_priority::AFTER_WIFI; }
@@ -40,6 +46,8 @@ class Em112Bridge : public Component, public uart::UARTDevice {
   void set_modbus_slave_id(uint8_t slave_id) { modbus_settings_.slave_id = slave_id; }
   void set_strict_exceptions(bool strict) { modbus_settings_.strict_exceptions = strict; }
   void set_debug_logging(bool enabled) { debug_logging_ = enabled; }
+  void set_simulate_solar_insufficient(bool enabled);
+  void set_simulate_solar_sufficient(bool enabled);
 
   void set_grid_net_power_sensor(sensor::Sensor *sensor) { grid_net_power_sensor_ = sensor; }
   void set_grid_import_power_sensor(sensor::Sensor *sensor) { grid_import_power_sensor_ = sensor; }
@@ -107,6 +115,8 @@ class Em112Bridge : public Component, public uart::UARTDevice {
   void handle_debug_request_(AsyncWebServerRequest *request);
 #endif
   void handle_poll_result_(bool ok, const DsmrActualValues &values, uint32_t response_time_ms, const char *error);
+  const char *override_mode_to_string_() const;
+  void apply_override_snapshot_(OverrideMode mode);
 
   void lock_();
   void unlock_();
@@ -116,6 +126,7 @@ class Em112Bridge : public Component, public uart::UARTDevice {
   MeterRuntimeConfig runtime_config_{};
   ModbusSettings modbus_settings_{};
   bool debug_logging_{false};
+  OverrideMode override_mode_{OverrideMode::LIVE};
 
   Em112RegisterModel registers_{};
   ModbusRtuSlave modbus_{};

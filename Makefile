@@ -10,6 +10,7 @@ PORT ?= /dev/ttyUSB0
 SLAVE ?= 1
 BAUD ?= 9600
 PARITY ?= N
+SMOKE_ARGS ?=
 
 export PLATFORMIO_CORE_DIR
 
@@ -33,7 +34,7 @@ test:
 	$(TEST_BIN)
 
 smoke:
-	$(PYTHON) tools/modbus_smoke_test.py --port $(PORT) --slave $(SLAVE) --baud $(BAUD) --parity $(PARITY)
+	$(PYTHON) tools/modbus_smoke_test.py --port $(PORT) --slave $(SLAVE) --baud $(BAUD) --parity $(PARITY) $(SMOKE_ARGS)
 
 check: test config compile
 

@@ -112,7 +112,13 @@ def decode_value(words: list[int], signed: bool) -> int:
     raise ValueError(f"expected one or two registers, got {len(words)}")
 
 
-def read_registers(port: serial.Serial, slave: int, check: ReadCheck, timeout: float) -> bool:
+def read_registers(
+    port: serial.Serial,
+    slave: int,
+    check: ReadCheck,
+    timeout: float,
+    measurements: dict[str, float] | None = None,
+) -> bool:
     pdu = bytes((slave, check.function)) + struct.pack(">HH", check.start, check.quantity)
     request = append_crc(pdu)
     response = request_response(port, request, 5, timeout)
@@ -137,12 +143,33 @@ def read_registers(port: serial.Serial, slave: int, check: ReadCheck, timeout: f
     words = decode_words(payload)
     raw = decode_value(words, check.signed)
     value = raw / check.scale
+    if measurements is not None:
+        measurements[check.label] = value
     suffix = f" {check.unit}" if check.unit else ""
     print(
         f"OK   {check.label:<15} raw={raw:<10} value={value:g}{suffix:<4} "
         f"regs=[{', '.join(f'0x{word:04X}' for word in words)}]"
     )
     return True
+
+
+def evaluate_solar_threshold(measurements: dict[str, float], threshold_a: float) -> tuple[bool, str]:
+    voltage = measurements.get("voltage_l_n")
+    current = measurements.get("current")
+    active_power = measurements.get("active_power")
+    if voltage is None or current is None or active_power is None:
+        return False, "missing voltage/current/active_power readings"
+
+    export_w = max(-active_power, 0.0)
+    required_export_w = voltage * threshold_a
+    current_ok = current >= threshold_a
+    export_ok = export_w >= required_export_w
+    passed = current_ok and export_ok
+    summary = (
+        f"threshold={threshold_a:g}A current={current:g}A export={export_w:g}W "
+        f"required_export={required_export_w:g}W current_ok={current_ok} export_ok={export_ok}"
+    )
+    return passed, summary
 
 
 def run_diagnostics_echo(port: serial.Serial, slave: int, timeout: float) -> bool:
@@ -176,6 +203,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stop-bits", type=int, choices=(1, 2), default=1, help="Serial stop bits. Default: 1.")
     parser.add_argument("--timeout", type=float, default=1.0, help="Response timeout in seconds. Default: 1.0.")
     parser.add_argument("--skip-fc08", action="store_true", help="Skip FC08 diagnostics echo check.")
+    parser.add_argument(
+        "--solar-threshold-a",
+        type=float,
+        action="append",
+        default=[],
+        help=(
+            "Evaluate a solar-sufficient threshold in amps using live Modbus reads. "
+            "Pass multiple times for multiple thresholds, for example --solar-threshold-a 1.5 --solar-threshold-a 6.0."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -199,12 +236,22 @@ def main() -> int:
     ) as port:
         passed = 0
         total = 0
+        measurements: dict[str, float] = {}
         for check in CHECKS:
             total += 1
-            passed += int(read_registers(port, args.slave, check, args.timeout))
+            passed += int(read_registers(port, args.slave, check, args.timeout, measurements))
         if not args.skip_fc08:
             total += 1
             passed += int(run_diagnostics_echo(port, args.slave, args.timeout))
+
+        for threshold in args.solar_threshold_a:
+            total += 1
+            ok, summary = evaluate_solar_threshold(measurements, threshold)
+            if ok:
+                print(f"OK   solar_threshold threshold={threshold:g}A {summary}")
+                passed += 1
+            else:
+                print(f"FAIL solar_threshold threshold={threshold:g}A {summary}")
 
     print(f"\n{passed}/{total} Modbus smoke checks passed")
     return 0 if passed == total else 1

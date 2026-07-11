@@ -39,6 +39,14 @@ void publish_text(text_sensor::TextSensor *sensor, const char *value) {
     sensor->publish_state(value == nullptr ? "" : value);
 }
 
+bool solar_threshold_ok(const MeterSnapshot &snapshot, float threshold_a) {
+  if (snapshot.selected_voltage_v <= 0.0f)
+    return false;
+  const float export_w = snapshot.grid_net_power_w < 0.0f ? -snapshot.grid_net_power_w : 0.0f;
+  const float required_export_w = snapshot.selected_voltage_v * threshold_a;
+  return snapshot.selected_current_a >= threshold_a && export_w >= required_export_w;
+}
+
 uint32_t now_ms() { return millis(); }
 
 bool parse_http_url(const char *url, char *host, size_t host_len, uint16_t *port, char *path, size_t path_len) {
@@ -171,9 +179,6 @@ void Em112Bridge::setup() {
 #ifdef ARDUINO
   this->mutex_ = xSemaphoreCreateMutex();
 #endif
-  this->runtime_config_.source_phase = SourcePhase::L1;
-  this->runtime_config_.fail_safe_import_power_w = 7000.0f;
-  this->runtime_config_.stale_timeout_s = 30;
   this->registers_.set_stale(now_ms(), this->runtime_config_);
   this->rpm_window_ms_ = now_ms();
 
@@ -221,6 +226,81 @@ void Em112Bridge::set_dsmr_url(const char *url) {
 
 void Em112Bridge::set_source_phase_string(const char *phase) {
   this->runtime_config_.source_phase = source_phase_from_string(phase, this->runtime_config_.source_phase);
+}
+
+void Em112Bridge::set_simulate_solar_insufficient(bool enabled) {
+  this->lock_();
+  if (enabled) {
+    this->override_mode_ = OverrideMode::INSUFFICIENT;
+    this->apply_override_snapshot_(this->override_mode_);
+  } else if (this->override_mode_ == OverrideMode::INSUFFICIENT) {
+    this->override_mode_ = OverrideMode::LIVE;
+  }
+  this->unlock_();
+}
+
+void Em112Bridge::set_simulate_solar_sufficient(bool enabled) {
+  this->lock_();
+  if (enabled) {
+    this->override_mode_ = OverrideMode::SUFFICIENT;
+    this->apply_override_snapshot_(this->override_mode_);
+  } else if (this->override_mode_ == OverrideMode::SUFFICIENT) {
+    this->override_mode_ = OverrideMode::LIVE;
+  }
+  this->unlock_();
+}
+
+const char *Em112Bridge::override_mode_to_string_() const {
+  switch (this->override_mode_) {
+    case OverrideMode::INSUFFICIENT:
+      return "insufficient";
+    case OverrideMode::SUFFICIENT:
+      return "sufficient";
+    case OverrideMode::LIVE:
+    default:
+      return "live";
+  }
+}
+
+void Em112Bridge::apply_override_snapshot_(OverrideMode mode) {
+  DsmrActualValues synthetic{};
+  synthetic.voltage_l1.available = true;
+  synthetic.voltage_l1.value = 230.0f;
+
+  synthetic.power_delivered.available = true;
+  synthetic.power_delivered.value = 0.0f;
+  synthetic.power_delivered_l1.available = true;
+  synthetic.power_delivered_l1.value = 0.0f;
+
+  synthetic.energy_delivered_tariff1.available = true;
+  synthetic.energy_delivered_tariff1.value = 16000.0f;
+  synthetic.energy_delivered_tariff2.available = true;
+  synthetic.energy_delivered_tariff2.value = 11000.0f;
+  synthetic.energy_returned_tariff1.available = true;
+  synthetic.energy_returned_tariff1.value = 6300.0f;
+  synthetic.energy_returned_tariff2.available = true;
+  synthetic.energy_returned_tariff2.value = 16000.0f;
+
+  if (mode == OverrideMode::SUFFICIENT) {
+    strncpy(synthetic.timestamp, "override_sufficient", sizeof(synthetic.timestamp) - 1);
+    synthetic.current_l1.available = true;
+    synthetic.current_l1.value = 8.0f;
+    synthetic.power_returned.available = true;
+    synthetic.power_returned.value = 2.0f;
+    synthetic.power_returned_l1.available = true;
+    synthetic.power_returned_l1.value = 2.0f;
+  } else {
+    strncpy(synthetic.timestamp, "override_insufficient", sizeof(synthetic.timestamp) - 1);
+    synthetic.current_l1.available = true;
+    synthetic.current_l1.value = 1.2f;
+    synthetic.power_returned.available = true;
+    synthetic.power_returned.value = 0.2f;
+    synthetic.power_returned_l1.available = true;
+    synthetic.power_returned_l1.value = 0.2f;
+  }
+
+  synthetic.timestamp[sizeof(synthetic.timestamp) - 1] = '\0';
+  this->registers_.update_from_dsmr(synthetic, this->runtime_config_, now_ms(), true);
 }
 
 void Em112Bridge::lock_() {
@@ -316,14 +396,25 @@ void Em112Bridge::handle_poll_result_(bool ok, const DsmrActualValues &values, u
                                       const char *error) {
   this->lock_();
   this->dsmr_response_time_ms_ = response_time_ms;
+
   if (ok) {
     this->dsmr_success_count_++;
     this->dsmr_last_error_[0] = '\0';
-    this->registers_.update_from_dsmr(values, this->runtime_config_, now_ms(), true);
   } else {
     this->dsmr_fail_count_++;
     strncpy(this->dsmr_last_error_, error == nullptr ? "unknown DSMR error" : error, sizeof(this->dsmr_last_error_) - 1);
     this->dsmr_last_error_[sizeof(this->dsmr_last_error_) - 1] = '\0';
+  }
+
+  if (this->override_mode_ != OverrideMode::LIVE) {
+    this->apply_override_snapshot_(this->override_mode_);
+    this->unlock_();
+    return;
+  }
+
+  if (ok) {
+    this->registers_.update_from_dsmr(values, this->runtime_config_, now_ms(), true);
+  } else {
     const MeterSnapshot snapshot = this->registers_.snapshot();
     if (snapshot.last_success_ms == 0 ||
         now_ms() - snapshot.last_success_ms > (this->runtime_config_.stale_timeout_s * 1000U)) {
@@ -514,7 +605,12 @@ void Em112Bridge::handle_debug_json_request_(AsyncWebServerRequest *request) {
   const MeterSnapshot snapshot = this->registers_.snapshot();
   const ModbusCounters counters = this->modbus_.counters();
   const size_t count = this->debug_ring_.size();
+  const char *override_mode = this->override_mode_to_string_();
   this->unlock_();
+
+  const bool threshold_15_ok = solar_threshold_ok(snapshot, 1.5f);
+  const bool threshold_60_ok = solar_threshold_ok(snapshot, 6.0f);
+  const float export_w = snapshot.grid_net_power_w < 0.0f ? -snapshot.grid_net_power_w : 0.0f;
 
   AsyncResponseStream *response = request->beginResponseStream("application/json");
   response->print("{\"project\":\"wallbox-powerboost-emulator\",\"meter_profile\":\"EM112 PF.B\",");
@@ -530,7 +626,15 @@ void Em112Bridge::handle_debug_json_request_(AsyncWebServerRequest *request) {
   response->print(snapshot.fail_safe_active ? "true" : "false");
   response->print(",\"timestamp\":\"");
   write_json_escaped(response, snapshot.timestamp);
-  response->print("\"},\"modbus\":{\"total_requests\":");
+  response->print("\",\"override_mode\":\"");
+  write_json_escaped(response, override_mode);
+  response->print("\",\"export_w\":");
+  response->printf("%.3f", export_w);
+  response->print(",\"solar_threshold_1_5a_ok\":");
+  response->print(threshold_15_ok ? "true" : "false");
+  response->print(",\"solar_threshold_6_0a_ok\":");
+  response->print(threshold_60_ok ? "true" : "false");
+  response->print("},\"modbus\":{\"total_requests\":");
   response->print(counters.total_requests);
   response->print(",\"crc_errors\":");
   response->print(counters.crc_errors);
@@ -577,7 +681,12 @@ void Em112Bridge::handle_debug_request_(AsyncWebServerRequest *request) {
   const MeterSnapshot snapshot = this->registers_.snapshot();
   const ModbusCounters counters = this->modbus_.counters();
   const size_t count = this->debug_ring_.size();
+  const char *override_mode = this->override_mode_to_string_();
   this->unlock_();
+
+  const bool threshold_15_ok = solar_threshold_ok(snapshot, 1.5f);
+  const bool threshold_60_ok = solar_threshold_ok(snapshot, 6.0f);
+  const float export_w = snapshot.grid_net_power_w < 0.0f ? -snapshot.grid_net_power_w : 0.0f;
 
   AsyncResponseStream *response = request->beginResponseStream("text/html");
   response->print("<!doctype html><html><head><meta charset='utf-8'><title>wallbox-powerboost-emulator</title>");
@@ -590,6 +699,14 @@ void Em112Bridge::handle_debug_request_(AsyncWebServerRequest *request) {
   response->printf("%.3f", snapshot.selected_voltage_v);
   response->print("</td></tr><tr><th>Current A</th><td>");
   response->printf("%.3f", snapshot.selected_current_a);
+  response->print("</td></tr><tr><th>Export W</th><td>");
+  response->printf("%.3f", export_w);
+  response->print("</td></tr><tr><th>Override mode</th><td>");
+  write_html_escaped(response, override_mode);
+  response->print("</td></tr><tr><th>Solar threshold 1.5 A</th><td>");
+  response->print(threshold_15_ok ? "ok" : "fail");
+  response->print("</td></tr><tr><th>Solar threshold 6.0 A</th><td>");
+  response->print(threshold_60_ok ? "ok" : "fail");
   response->print("</td></tr><tr><th>Import kWh</th><td>");
   response->printf("%.3f", snapshot.import_energy_kwh);
   response->print("</td></tr><tr><th>Export kWh</th><td>");

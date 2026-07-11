@@ -249,6 +249,28 @@ switch:
       - lambda: id(wallbox_powerboost_emulator_component).set_strict_exceptions(true);
     turn_off_action:
       - lambda: id(wallbox_powerboost_emulator_component).set_strict_exceptions(false);
+  - platform: template
+    name: Simulate Solar Insufficient
+    entity_category: config
+    restore_mode: RESTORE_DEFAULT_OFF
+    optimistic: true
+    turn_on_action:
+      - lambda: |-
+          id(wallbox_powerboost_emulator_component).set_simulate_solar_sufficient(false);
+          id(wallbox_powerboost_emulator_component).set_simulate_solar_insufficient(true);
+    turn_off_action:
+      - lambda: id(wallbox_powerboost_emulator_component).set_simulate_solar_insufficient(false);
+  - platform: template
+    name: Simulate Solar Sufficient
+    entity_category: config
+    restore_mode: RESTORE_DEFAULT_OFF
+    optimistic: true
+    turn_on_action:
+      - lambda: |-
+          id(wallbox_powerboost_emulator_component).set_simulate_solar_insufficient(false);
+          id(wallbox_powerboost_emulator_component).set_simulate_solar_sufficient(true);
+    turn_off_action:
+      - lambda: id(wallbox_powerboost_emulator_component).set_simulate_solar_sufficient(false);
 
 text:
   - platform: template

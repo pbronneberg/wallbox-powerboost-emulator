@@ -212,6 +212,80 @@ void test_realworld_export_snapshot() {
   require_close(model.snapshot().export_energy_kwh, 6298.306f + 15964.774f, 0.1f, "realworld export energy total");
 }
 
+void test_solar_threshold_fixtures() {
+  // Fixture A: moderate export. Meets 1.5 A threshold, does not meet 6.0 A threshold.
+  const char *fixture_a =
+      "{\"actual\":["
+      "{\"name\":\"timestamp\",\"value\":\"260707120000S\"},"
+      "{\"name\":\"energy_delivered_tariff1\",\"value\":16000.000,\"unit\":\"kWh\"},"
+      "{\"name\":\"energy_delivered_tariff2\",\"value\":11000.000,\"unit\":\"kWh\"},"
+      "{\"name\":\"energy_returned_tariff1\",\"value\":6300.000,\"unit\":\"kWh\"},"
+      "{\"name\":\"energy_returned_tariff2\",\"value\":16000.000,\"unit\":\"kWh\"},"
+      "{\"name\":\"power_delivered\",\"value\":0.000,\"unit\":\"kW\"},"
+      "{\"name\":\"power_returned\",\"value\":0.400,\"unit\":\"kW\"},"
+      "{\"name\":\"voltage_l1\",\"value\":230.000,\"unit\":\"V\"},"
+      "{\"name\":\"current_l1\",\"value\":1.800,\"unit\":\"A\"},"
+      "{\"name\":\"power_delivered_l1\",\"value\":0.000,\"unit\":\"kW\"},"
+      "{\"name\":\"power_returned_l1\",\"value\":0.400,\"unit\":\"kW\"}"
+      "]}";
+
+  DsmrActualValues actual_a{};
+  char error[96]{};
+  require(parse_dsmr_actual_json(fixture_a, &actual_a, error, sizeof(error)), error);
+
+  MeterRuntimeConfig config{};
+  config.source_phase = SourcePhase::L1;
+  Em112RegisterModel model;
+  model.update_from_dsmr(actual_a, config, 7000, true);
+
+  require_close(model.snapshot().grid_net_power_w, -400.0f, 0.5f, "fixture A export power");
+  require_close(model.snapshot().selected_current_a, 1.8f, 0.01f, "fixture A selected current");
+  require_close(model.snapshot().selected_voltage_v, 230.0f, 0.1f, "fixture A selected voltage");
+
+  const float threshold_15_w = model.snapshot().selected_voltage_v * 1.5f;
+  const float threshold_60_w = model.snapshot().selected_voltage_v * 6.0f;
+  const float export_w_a = -model.snapshot().grid_net_power_w;
+  require(export_w_a >= threshold_15_w, "fixture A satisfies 1.5 A export threshold");
+  require(export_w_a < threshold_60_w, "fixture A below 6.0 A export threshold");
+  require(model.snapshot().selected_current_a >= 1.5f, "fixture A current >= 1.5 A");
+  require(model.snapshot().selected_current_a < 6.0f, "fixture A current < 6.0 A");
+
+  uint16_t current_word = 0;
+  require(model.read_register(0x0002, &current_word, true), "fixture A current register readable");
+  require(current_word == 1800, "fixture A current register is 1.800 A");
+
+  // Fixture B: strong export. Meets both 1.5 A and 6.0 A thresholds.
+  const char *fixture_b =
+      "{\"actual\":["
+      "{\"name\":\"timestamp\",\"value\":\"260707130000S\"},"
+      "{\"name\":\"energy_delivered_tariff1\",\"value\":16000.100,\"unit\":\"kWh\"},"
+      "{\"name\":\"energy_delivered_tariff2\",\"value\":11000.100,\"unit\":\"kWh\"},"
+      "{\"name\":\"energy_returned_tariff1\",\"value\":6300.100,\"unit\":\"kWh\"},"
+      "{\"name\":\"energy_returned_tariff2\",\"value\":16000.100,\"unit\":\"kWh\"},"
+      "{\"name\":\"power_delivered\",\"value\":0.000,\"unit\":\"kW\"},"
+      "{\"name\":\"power_returned\",\"value\":1.700,\"unit\":\"kW\"},"
+      "{\"name\":\"voltage_l1\",\"value\":230.000,\"unit\":\"V\"},"
+      "{\"name\":\"current_l1\",\"value\":7.500,\"unit\":\"A\"},"
+      "{\"name\":\"power_delivered_l1\",\"value\":0.000,\"unit\":\"kW\"},"
+      "{\"name\":\"power_returned_l1\",\"value\":1.700,\"unit\":\"kW\"}"
+      "]}";
+
+  DsmrActualValues actual_b{};
+  require(parse_dsmr_actual_json(fixture_b, &actual_b, error, sizeof(error)), error);
+
+  model.update_from_dsmr(actual_b, config, 8000, true);
+  require_close(model.snapshot().grid_net_power_w, -1700.0f, 0.5f, "fixture B export power");
+  require_close(model.snapshot().selected_current_a, 7.5f, 0.01f, "fixture B selected current");
+
+  const float export_w_b = -model.snapshot().grid_net_power_w;
+  require(export_w_b >= threshold_15_w, "fixture B satisfies 1.5 A export threshold");
+  require(export_w_b >= threshold_60_w, "fixture B satisfies 6.0 A export threshold");
+  require(model.snapshot().selected_current_a >= 6.0f, "fixture B current >= 6.0 A");
+
+  require(model.read_register(0x0002, &current_word, true), "fixture B current register readable");
+  require(current_word == 7500, "fixture B current register is 7.500 A");
+}
+
 }  // namespace
 
 int main() {
@@ -222,6 +296,7 @@ int main() {
   test_crc_and_fc03();
   test_unknown_and_stale();
   test_realworld_export_snapshot();
+  test_solar_threshold_fixtures();
   std::puts("All host tests passed");
   return 0;
 }

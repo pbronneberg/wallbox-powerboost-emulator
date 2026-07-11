@@ -129,8 +129,11 @@ Runtime Home Assistant controls are provided where practical:
 - Source phase mode: `total`, `l1`, `l2`, `l3`.
 - Debug logging.
 - Strict Modbus exceptions.
+- Simulation override switches: force `insufficient` or `sufficient` solar snapshots for Modbus debugging.
 
 The default source phase is `l1`, which is intended for common single-phase Wallbox installations. Use `total` only if that matches how you want the Wallbox to interpret the installation.
+
+The simulator overrides are off by default. With both switches off, the firmware behaves as normal live DSMR-to-EM112 PF.B bridge logic and can stay enabled in regular operation.
 
 ## DSMRloggerAPI
 
@@ -238,7 +241,15 @@ The repository includes a small smoke-test client:
 python tools/modbus_smoke_test.py --port /dev/ttyUSB0 --slave 1
 ```
 
+To check the solar-threshold scenarios from the same fixture set, pass the extra threshold arguments through `make smoke`:
+
+```bash
+make smoke PORT=/dev/ttyUSB0 SMOKE_ARGS='--solar-threshold-a 1.5 --solar-threshold-a 6.0'
+```
+
 It checks FC03/FC04 reads for the implemented EM112 PF.B registers and FC08 Return Query Data. It is intentionally separate from `make check` because it requires a flashed board and a physical USB-RS485 adapter.
+
+The additional solar-threshold checks are based on the live Modbus reads: they verify that the measured current is at least the requested threshold and that export power is at least voltage times threshold. The 1.5 A case is the more permissive baseline; the 6.0 A case matches the commonly documented Wallbox smart/solar floor.
 
 If the Wallbox polls unknown registers, enable debug logging and inspect `/debug`. Unknown registers return `0` unless strict mode is enabled.
 
